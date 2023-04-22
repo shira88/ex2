@@ -1,0 +1,48 @@
+shiras, nadaveisen
+Shira Schattner (209511500), Nadav Eisen (326647898)
+EX: 2
+
+FILES:
+uthreads.cpp -- contains all required functions for part 2
+MAKEFILE -- the makefile for part 2
+
+ANSWERS FOR PART 1:
+
+Q1:
+a.  sigsetjmp - Saves the current location, CPU state and (optionally) signal mask in env for later use. Returns 0 if
+    returning directly, returns a user defined val if returning from siglongjmp.
+
+    Siglongjmp - goes to the saved location, restoring the state and the signal mask. The  int parameter val is what the
+    function sigsetjump will return once returning to the CPU state specified by env.
+
+b.  sigsetjmp and siglongjmp affect signal masking by saving and restoring the signal mask along with the program state.
+    The signal saving is optional, sigsetjmp only save the signal mask if the given savesigs parameter is non-zero.
+
+Q2:
+    One general use of user-level threads is to perform a merge-sort. User level threads are a reasonable choice
+    because we need to switch between threads more often as we attempt to sort more sub-arrays of the original array at
+    the same time.
+
+Q3:
+Advantages:
+    When there is a new process for each tab, they are protected from each other. They have separated memory space,
+    which makes it more secure.
+
+Disadvantages:
+    Higher overhead, as all operations require a kernel trap.
+    The tabs don’t share address space, as all operations run on different processes, therefore communication between
+    them is more complicated.
+
+Q4:
+    The keyboard sends a hardware interrupt to the OS. The OS then sends a signal to the shell, indicating what keys
+    were pressed. The shell receives the input, and translates it to a command. Since this is a kill command, the shell
+    sends a SIGTERM signal to the OS, which forwards it to the process we want to kill. That process receives the
+    signal and acts accordingly - terminates.
+
+Q5:
+    'Real' time is the actual time in the physical world, whereas 'virtual' time is the time measured by the CPU, which
+    may be different.
+
+    One example of using ‘real’ time is waking up at the exact time the sun rises in the morning, say 5:30AM, while an
+    example of using ‘virtual’ time is measuring the runtime of a program using CPU ticks.
+
