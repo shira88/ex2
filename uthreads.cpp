@@ -20,10 +20,8 @@
 typedef unsigned long address_t;
 
 // --------------------------- GLOBAL VARIABLES --------------------------- //
-struct itimerval running_timer;
-struct sigaction sa_timer = {0};
-struct itimerval clock_timer;
-struct sigaction sa_clock = {0};
+struct itimerval timer;
+struct sigaction sa{};
 sigjmp_buf env[MAX_THREAD_NUM];
 int available_ids[MAX_THREAD_NUM];
 char *stacks[MAX_THREAD_NUM];
@@ -38,22 +36,26 @@ int total_quantums;
 
 void jump_to_thread ()
 {
-  if (setitimer (ITIMER_VIRTUAL, &running_timer, nullptr))
+  if (setitimer (ITIMER_VIRTUAL, &timer, nullptr))
   {
     std::cerr << "system error: setitimer error." << std::endl;
   }
 
-  sigsetjmp(env[running_thread], 1);
+  if(!ready_deque.empty()) {
 
-  // take the first ready thread and put it in running
-  running_thread = ready_deque.front ();
-  ready_deque.pop_front ();
+    std::cout << "jumping to: " << ready_deque.front() << std::endl;
 
-  quantums[running_thread]++;
+    if(running_thread != ready_deque.front ()) {
+      sigsetjmp(env[running_thread], 1);
+      running_thread = ready_deque.front ();
 
-  std::cout << "running thread: " << running_thread << std::endl;
+      std::cout << running_thread << std::endl;
 
-  siglongjmp (env[running_thread], 1);
+      siglongjmp (env[running_thread], 1);
+    }
+
+    ready_deque.pop_front ();
+  }
 }
 
 int get_tid ()
@@ -88,12 +90,6 @@ bool is_valid_tid (int tid)
   return true;
 }
 
-void timer_handler (int sig)
-{
-  ready_deque.push_back(running_thread);
-  jump_to_thread ();
-}
-
 void terminate_main ()
 {
   for (auto stack: stacks)
@@ -103,17 +99,21 @@ void terminate_main ()
   exit (0);
 }
 
-void clock_handler (int sig)
+void handler (int sig)
 {
-  total_quantums++;
+  std::cout << "after quantum: " << ready_deque.front() << " , " << ready_deque.back() << std::endl;
 
-  for (auto &entry: sleeping_threads)
-  {
+  ready_deque.push_back(running_thread);
+  jump_to_thread ();
+
+  total_quantums++;
+  quantums[running_thread]++;
+
+  for (auto &entry: sleeping_threads) {
     entry.second--;
-    if (entry.second == 0)
-    {
-      sleeping_threads.erase (entry.first);
-      ready_deque.push_back (entry.first);
+    if (entry.second == 0) {
+      sleeping_threads.erase(entry.first);
+      ready_deque.push_back(entry.first);
     }
   }
 }
@@ -132,39 +132,29 @@ int uthread_init (int quantum_usecs)
     available_ids[i] = AVAILABLE;
   }
 
-  // create a running_timer for the running state
-  sa_timer.sa_handler = &timer_handler;
-  if (sigaction (SIGVTALRM, &sa_timer, nullptr) < 0)
+
+  sa.sa_handler = handler;
+//    sigemptyset(&sa.sa_mask);
+  if (sigaction (SIGVTALRM, &sa, nullptr) < 0)
   {
     std::cerr << "system error: sigaction error." << std::endl;
   }
 
-  running_timer.it_interval.tv_sec = 0;
-  running_timer.it_interval.tv_usec = quantum_usecs;
+  // create a timer for the running state
+  timer.it_value.tv_sec = 0;
+  timer.it_value.tv_usec = quantum_usecs;
+  timer.it_interval.tv_sec = 0;
+  timer.it_interval.tv_usec = quantum_usecs;
 
-  // Start a virtual running_timer. It counts down whenever this process is executing.
-  if (setitimer (ITIMER_VIRTUAL, &running_timer, nullptr))
-  {
-    std::cerr << "system error: setitimer error." << std::endl;
-  }
-
-  sa_clock.sa_handler = &clock_handler;
-  if (sigaction (SIGVTALRM, &sa_clock, nullptr) < 0)
-  {
-    std::cerr << "system error: sigaction error." << std::endl;
-  }
-
-  clock_timer.it_interval.tv_sec = 0;
-  clock_timer.it_interval.tv_usec = quantum_usecs;
-
-  // Start a virtual running_timer. It counts down whenever this process is executing.
-  if (setitimer (ITIMER_VIRTUAL, &clock_timer, nullptr))
+  // Start a virtual timer. It counts down whenever this process is executing.
+  if (setitimer (ITIMER_VIRTUAL, &timer, nullptr))
   {
     std::cerr << "system error: setitimer error." << std::endl;
   }
 
   sigaddset(&env[running_thread]->__saved_mask, SIGVTALRM);
   total_quantums = 1;
+  quantums[0]++;
 
   return 0;
 }
@@ -189,6 +179,9 @@ int uthread_spawn (thread_entry_point entry_point)
   }
 
   ready_deque.push_back (tid);
+
+
+
   available_ids[tid] = UNAVAILABLE;
 
   char *stack = new char[STACK_SIZE];
@@ -237,21 +230,32 @@ int uthread_terminate (int tid)
     ready_deque.erase (std::find (ready_deque.begin (), ready_deque.end (), tid));
   }
 
+  auto it = sleeping_threads.find(tid);
+  if(it != sleeping_threads.end())
+  {
+    sleeping_threads.erase (it);
+  }
+
   if (tid == 0)
   {
     terminate_main ();
   }
   free (stacks[tid]);
+  sigprocmask(SIG_UNBLOCK, &env[running_thread]->__saved_mask, nullptr);
   jump_to_thread ();
 
-  sigprocmask(SIG_UNBLOCK, &env[running_thread]->__saved_mask, nullptr);
+
 
   return 0;
 }
 
 int uthread_block (int tid)
 {
+
+
   sigprocmask(SIG_BLOCK, &env[running_thread]->__saved_mask, nullptr);
+
+
 
   //CHECKS IF THE TID IS EVEN VALID
   if (!is_valid_tid (tid))
@@ -266,18 +270,25 @@ int uthread_block (int tid)
     return -1;
   }
   blocked_set.insert (tid);
+
+
+
   ready_deque.erase (std::find (ready_deque.begin (), ready_deque.end (), tid));
+
+
+  std::cout << "deque after erase: " << ready_deque.front() << " , " << ready_deque.back() << std::endl;
+
+
   if (running_thread == tid)
   {
+    sigprocmask(SIG_UNBLOCK, &env[running_thread]->__saved_mask, nullptr);
     jump_to_thread ();
   }
   else
   {
     ready_deque.erase (std::find (ready_deque.begin (), ready_deque.end (), tid));
+    sigprocmask(SIG_UNBLOCK, &env[running_thread]->__saved_mask, nullptr);
   }
-
-  sigprocmask(SIG_UNBLOCK, &env[running_thread]->__saved_mask, nullptr);
-
   return 0;
 }
 
@@ -290,8 +301,14 @@ int uthread_resume (int tid)
     std::cerr << "The provided tid doesn't belong to a blocked thread." << std::endl;
     return -1;
   }
+
   blocked_set.erase (tid);
+
   ready_deque.push_back (tid);
+
+
+
+
 
   sigprocmask(SIG_UNBLOCK, &env[running_thread]->__saved_mask, nullptr);
 
@@ -300,6 +317,7 @@ int uthread_resume (int tid)
 
 int uthread_sleep (int num_quantums)
 {
+
   sigprocmask(SIG_BLOCK, &env[running_thread]->__saved_mask, nullptr);
 
   if (running_thread == 0)
@@ -309,9 +327,9 @@ int uthread_sleep (int num_quantums)
   }
 
   sleeping_threads.insert (std::make_pair(uthread_get_tid (), num_quantums));
-  jump_to_thread ();
 
   sigprocmask(SIG_UNBLOCK, &env[running_thread]->__saved_mask, nullptr);
+  jump_to_thread ();
 
   return 0;
 }
